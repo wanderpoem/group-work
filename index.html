@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <script src="../js/gsap.min.js"></script>
+  <script src="../js/echarts.min.js"></script>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document</title>
+  <style>
+    html body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #ffffff; 
+    }
+    #dataTypeControl {
+      position: absolute;
+      top: 70px;
+      left: 20px;
+      z-index: 2;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      border-radius: 4px;
+    }
+    #yearControl {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 2;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      border-radius: 4px;
+    }
+  
+    #yearSlider {
+      width: 200px;
+      margin-right: 10px;
+    }
+  
+    #yearDisplay {
+      color: #333;
+      font-size: 16px;
+    }
+    #cameraInfo {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 2;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+    #tooltip {
+      position: absolute;
+      z-index: 2;
+      background: white;
+      padding: 10px;
+      border-radius: 2px;
+      visibility: hidden;
+    }
+    .colorAxis {
+      position: absolute;
+      top: 210px;        
+      left: 20px;       
+      right: unset;
+      bottom: unset;
+      width: 200px;
+      height: 40px;
+      border: 1px solid #fff;
+      border-radius: 4px;
+      display: none;
+      z-index: 5;
+    }
+    #gdpColorAxis {
+      background: linear-gradient(to right, #E6F3FF, #00008B);
+      display: block;
+    }
+     #popColorAxis {
+      background: linear-gradient(to right, #FFFACD, #DAA520);
+    }
+    #birthColorAxis {
+      background: linear-gradient(to right, #E8F5E9, #1B5E20);
+    }
+    #colorAxisLabels {
+      position: absolute;
+      top: 255px;
+      left: 20px;
+      width: 200px;
+      display: flex;
+      justify-content: space-between;
+      color: #333;
+      font-size: 12px;
+      z-index: 5;
+      pointer-events: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="provinceInfo" style="position:absolute;top:130px;left:20px;z-index:3;background:rgba(255,255,255,0.95);padding:12px;border-radius:4px;min-width:180px;display:none;"></div>
+  <button id="resetViewBtn" style="position:absolute;top:30px;left:380px;z-index:10;">复原视角</button>
+  <div id="yearControl">
+    <input type="range" id="yearSlider" min="2005" max="2023" value="2005" step="1">
+    <span id="yearDisplay">2005年</span>
+    <button id="toggleBubbleBtn" style="margin-left:16px;">气泡图</button>
+  </div>
+
+  <div id="cameraInfo"></div>
+  <script src="../js/three.js"></script>
+  <script src="../js/OrbitControls.js"></script>
+  <script src="../js/d3-geo.v1.min.js"></script>
+  <script src="../js/echarts.min.js"></script>
+  <div id="provinceChart" style="position:absolute;z-index:20;display:none;width:600px;height:250px;background:rgba(255,255,255,0.98);border-radius:8px;box-shadow:0 2px 8px #888;"></div>
+  <canvas id="canvas" width="1000" height="1000"></canvas>
+  <div id="dataTypeControl">
+    <select id="dataType">
+      <option value="gdp">GDP</option>
+      <option value="pop">人口</option>
+      <option value="birth">出生率</option>
+    </select>
+  </div>
+    <div id="colorAxis"></div>
+    <div id="gdpColorAxis" class="colorAxis"></div>
+    <div id="popColorAxis" class="colorAxis"></div>
+    <div id="birthColorAxis" class="colorAxis"></div>
+    <div id="colorAxisLabels">
+    <span id="minValue"></span>
+    <span id="maxValue"></span>
+  </div>
+  <div id="bubbleChart" style="position:absolute;right:30px;bottom:30px;width:600px;height:400px;z-index:30;background:rgba(255,255,255,0.98);border-radius:8px;box-shadow:0 2px 8px #888;display:none;"></div>
+  <div id="tooltip"></div>
+  <script>
+    class chinaMap {
+      constructor() {
+        this.currentData = {}; 
+        this.currentYear = '2005';
+        this.dataType = 'gdp';
+        this.fertilityData = {};
+        this.maxValue = 0;    
+        this.minValue = 0; 
+        this.maxGDP = 0;
+        this.minGDP = 0;
+        this.colorSchemes = {
+          gdp: {
+            startColor: new THREE.Color('#E6F3FF'),
+            endColor: new THREE.Color('#00008B'),
+            suffix: '亿元'
+          },
+          pop: {
+            startColor: new THREE.Color('#FFFACD'),
+            endColor: new THREE.Color('#DAA520'),
+            suffix: '万人'
+          },
+          birth: {
+            startColor: new THREE.Color('#E8F5E9'),
+            endColor: new THREE.Color('#1B5E20'),
+            suffix: '‰'
+          }
+        };
+        this.selectedProvince = null; 
+        this.provinceInfoBox = document.getElementById('provinceInfo');
+        this.defaultCamera = {
+          position: { x: this.camera ? this.camera.position.x : 0, y: this.camera ? this.camera.position.y : 0, z: this.camera ? this.camera.position.z : 100 },
+          rotation: { x: this.camera ? this.camera.rotation.x : 0, y: this.camera ? this.camera.rotation.y : 0, z: this.camera ? this.camera.rotation.z : 0 }
+        };
+        document.getElementById('resetViewBtn').addEventListener('click', () => this.resetView());
+        this.setupDataTypeSelector();
+        this.setupClickEvent();
+        this.init();  
+        this.setupCameraLogger();
+        const bubbleBtn = document.getElementById('toggleBubbleBtn');
+        const bubbleChartDiv = document.getElementById('bubbleChart');
+        bubbleBtn.onclick = function() {
+          if (bubbleChartDiv.style.display === 'none') {
+            bubbleChartDiv.style.display = 'block';
+            bubbleBtn.textContent = '气泡图';
+          } else {
+            bubbleChartDiv.style.display = 'none';
+            bubbleBtn.textContent = '气泡图';
+          }
+        };
+      }
+
+    async init() {
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0xffffff); 
+        this.activeInstersect = [];
+        this.setRenderer();
+        this.setCamera();
+        this.setController();
+        this.setRaycaster();
+        
+        // 等待GDP数据加载
+        try {
+        await this.loadData();
+        this.loadMapData();
+        this.animate();
+        this.addHelper();
+        this.setupYearSelector();
+        } catch (error) {
+          console.error('Error loading GDP data:', error);
+        }
+        this.defaultCamera = {
+          position: { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
+          rotation: { x: this.camera.rotation.x, y: this.camera.rotation.y, z: this.camera.rotation.z }
+        };
+        await this.showBubbleChart(this.currentYear);
+    }
+    async focusProvince(province) {
+      this.selectedProvince = province;
+      const provinceName = province.properties.name;
+      this.map.children.forEach(p => {
+        p.children.forEach(child => {
+            if (child.material && child.material.length === 2) {
+              if (p === province) {
+                // 选中的省份设置为红色
+                child.material[0].color.set(0xff0000);
+                child.material[1].color.set(0xff0000);
+              } else {
+                const value = this.currentData[p.properties.name] || 0;
+                const color = this.getColorByValue(value);
+                child.material[0].color.copy(color);
+                child.material[1].color.copy(color);
+              }
+            }
+          });
+        });
+      if (!this.angleData) {
+        this.angleData = await fetch('angle.json').then(r => r.json());
+      }
+      const angle = this.angleData[provinceName];
+      if (angle) {
+        const toRad = deg => deg * Math.PI / 180;
+        const xRad = toRad(angle['x轴']);
+        const yRad = toRad(angle['y轴']);
+        const zRad = toRad(angle['z轴']);
+        const posX = angle['x'];
+        const posY = angle['y'];
+        const posZ = angle['z'];
+      
+        // 动画移动摄像机到指定位置和角度
+        gsap.to(this.camera.position, {
+          duration: 1,
+          x: posX,
+          y: posY,
+          z: posZ,
+          onUpdate: () => {
+            this.camera.lookAt(0, 0, 0);
+          }
+        });
+        gsap.to(this.camera.rotation, {
+          duration: 1,
+          x: xRad,
+          y: yRad,
+          z: zRad
+        });
+      }
+
+      this.showProvinceInfo(provinceName);
+
+      const worldPos = new THREE.Vector3();
+      province.getWorldPosition(worldPos);
+
+       // 投影到屏幕坐标
+      worldPos.project(this.camera);
+      const x = (worldPos.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (1 - (worldPos.y * 0.5 + 0.5)) * window.innerHeight;
+      await this.showBubbleChart(this.currentYear);
+      this.showProvinceChart(provinceName, { x, y });
+    }
+
+      resetView() {
+      // 动画复原摄像机位置和角度
+      gsap.to(this.camera.position, {
+        duration: 1,
+        x: this.defaultCamera.position.x,
+        y: this.defaultCamera.position.y,
+        z: this.defaultCamera.position.z,
+        onUpdate: () => {
+          this.camera.lookAt(0, 0, 0);
+        }
+      });
+      gsap.to(this.camera.rotation, {
+        duration: 1,
+        x: this.defaultCamera.rotation.x,
+        y: this.defaultCamera.rotation.y,
+        z: this.defaultCamera.rotation.z
+      });
+      this.selectedProvince = null;
+      this.provinceInfoBox.style.display = 'none';
+      document.getElementById('provinceChart').style.display = 'none';
+      this.showBubbleChart(this.currentYear);
+      this.updateMapColors();
+      
+    }
+      showProvinceChart(provinceName) {
+        const chartDiv = document.getElementById('provinceChart');
+        chartDiv.style.display = 'block';
+        chartDiv.innerHTML = `
+            <div id="provinceLineChart" style="width: 400px; height: 250px; display:inline-block; margin-left:6px;"></div>
+            <div id="provincePieChart" style="width: 190px; height: 250px; display:inline-block;vertical-align:top;"></div>
+          `;
+          
+        // 销毁旧的 ECharts ，防止多次初始化
+        if (window.provinceLineChartInstance) {
+          window.provinceLineChartInstance.dispose();
+          window.provinceLineChartInstance = null;
+        }
+        if (window.provincePieChartInstance) {
+          window.provincePieChartInstance.dispose();
+          window.provincePieChartInstance = null;
+        }
+      
+        // 获取该省的position方向
+        const angle = this.angleData && this.angleData[provinceName];
+        let posStyle = { left: 'unset', right: '20px', top: '20px', bottom: 'unset' };
+        if (angle && angle.position) {
+          const posMap = {
+              1: { left: '50%', top: '15%', transform: 'translateX(-50%)', right: '', bottom: '' },      // 上中
+              2: { right: '10%', top: '8%', left: '', bottom: '', transform: '' },                       // 右上
+              3: { right: '8%', top: '50%', left: '', bottom: '', transform: 'translateY(-50%)' },       // 右中
+              4: { right: '10%', bottom: '8%', left: '', top: '', transform: '' },                       // 右下
+              5: { left: '50%', bottom: '15%', transform: 'translateX(-50%)', right: '', top: '' },      // 下中
+              6: { left: '5%', bottom: '15%', right: '', top: '', transform: '' },                       // 左下
+              7: { left: '15%', top: '50%', right: '', bottom: '', transform: 'translateY(-50%)' },       // 左中
+              8: { left: '15%', top: '15%', right: '', bottom: '', transform: '' },                       // 左上
+            };
+          posStyle = posMap[angle.position] || posStyle;
+        }
+      
+        chartDiv.style.left = posStyle.left || '';
+        chartDiv.style.right = posStyle.right || '';
+        chartDiv.style.top = posStyle.top || '';
+        chartDiv.style.bottom = posStyle.bottom || '';
+        chartDiv.style.transform = posStyle.transform || '';
+      
+        fetch(`provincedata/${provinceName}_data.json`)
+          .then(r => r.json())
+          .then(data => {
+            const years = data.map(d => d['年份']);
+            const gdp = data.map(d => d['GDP']);
+            const pop = data.map(d => d['人口']);
+            const birth = data.map(d => d['出生率']);
+          
+            const lineOption = {
+              title: { text: `${provinceName} 历年数据`, left: 'center', top: 10, textStyle: { fontSize: 14 } },
+              tooltip: { trigger: 'axis' },
+              legend: { data: ['GDP', '人口', '出生率'], top: 35 },
+              grid: { left: 60, right: 60, bottom: 30, top: 60 }, 
+              xAxis: { type: 'category', data: years },
+              yAxis: [
+                { 
+                  type: 'value', 
+                  name: 'GDP(亿元)', 
+                  position: 'left',
+                  alignTicks: true,
+                  axisLine: { show: true, lineStyle: { color: '#5470C6' } },
+                  axisLabel: { color: '#5470C6' }
+                },
+                { 
+                  type: 'value', 
+                  name: '人口(万人)', 
+                  position: 'right',
+                  alignTicks: true,
+                  axisLine: { show: true, lineStyle: { color: '#91CC75' } },
+                  axisLabel: { color: '#91CC75' }
+                },
+                {
+                  type: 'value',
+                  name: '出生率(‰)',
+                  position: 'right',
+                  offset: 38, // 第二个y轴错开
+                  alignTicks: true,
+                  axisLine: { show: true, lineStyle: { color: '#ffc66c' } },
+                  axisLabel: { color: '#ffc66c' }
+                }
+              ],
+              series: [
+                { 
+                  name: 'GDP', 
+                  type: 'line',
+                  yAxisIndex: 0,
+                  itemStyle: { color: '#5470C6' },
+                  data: gdp.map((value, index) => ({
+                    value: value,
+                    itemStyle: {
+                      color: years[index] == this.currentYear ? '#ff0000' : undefined
+                    }
+                  }))
+                },
+                { 
+                  name: '人口', 
+                  type: 'line',
+                  yAxisIndex: 1,
+                  itemStyle: { color: '#91CC75' },
+                  data: pop.map((value, index) => ({
+                    value: value,
+                    itemStyle: {
+                      color: years[index] == this.currentYear ? '#ff0000' : undefined
+                    }
+                  }))
+                },
+                { 
+                  name: '出生率', 
+                  type: 'line',
+                  yAxisIndex: 2,
+                  itemStyle: { color: '#ffc66c' },
+                  data: birth.map((value, index) => ({
+                    value: value,
+                    itemStyle: {
+                      color: years[index] == this.currentYear ? '#ff0000' : undefined
+                    }
+                  }))
+                }
+              ]
+            };
+            window.provinceLineChartInstance = echarts.init(document.getElementById('provinceLineChart'));
+            window.provinceLineChartInstance.setOption(lineOption, true);
+          
+            // 饼图
+            const yearIdx = years.indexOf(this.currentYear * 1 || this.currentYear);
+            let value = 0;
+            let total = 0;
+            let label = '';
+            let suffix = '';
+            if (this.dataType === 'gdp') {
+              value = gdp[yearIdx];
+              label = 'GDP';
+              suffix = '亿元';
+              total = Object.values(this.currentData).reduce((a, b) => a + b, 0);
+            } else if (this.dataType === 'pop') {
+              value = pop[yearIdx];
+              label = '人口';
+              suffix = '万人';
+              total = Object.values(this.currentData).reduce((a, b) => a + b, 0);
+            } else if (this.dataType === 'birth') {
+              value = birth[yearIdx];
+              label = '出生率';
+              suffix = '‰';
+              total = Object.values(this.currentData).reduce((a, b) => a + b, 0);
+            }
+           const pieOption = {
+              title: { text: `${label}占比`, left: 'center', top: 10, textStyle: { fontSize: 13 } },
+              tooltip: { trigger: 'item', formatter: p => `${p.name}: ${p.value}${suffix} (${p.percent}%)` },
+              series: [{
+                type: 'pie',
+                radius: ['50%', '80%'],
+                avoidLabelOverlap: false,
+                label: {
+                  show: true,
+                  position: 'center',
+                  fontSize: 12,
+                  formatter: function(params) {
+                    if (params.name === provinceName) {
+                      return `${provinceName}\n${params.percent}%`;
+                    }
+                    return '';
+                  }
+                },
+                data: [
+                  { value: value, name: provinceName,},
+                  { value: total - value, name: '其他', itemStyle: { color: '#bcf4cf' ,emphasis:{color:"#bcf4cf"}}},
+                ]
+              }]
+            };
+            window.provincePieChartInstance = echarts.init(document.getElementById('provincePieChart'));
+            window.provincePieChartInstance.setOption(pieOption, true);
+            window.provincePieChartInstance.dispatchAction({
+                type: 'highlight',
+                seriesIndex: 0,
+                dataIndex: 0 
+              });
+          });
+      }
+        setupClickEvent() {
+          document.getElementById('canvas').addEventListener('click', async (event) => {
+          event.stopPropagation();
+          this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+          this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+          this.raycaster.setFromCamera(this.mouse, this.camera);
+          const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+          const clicked = intersects.find(
+            (item) => item.object.material && item.object.material.length === 2
+          );
+          if (clicked) {
+            await this.focusProvince(clicked.object.parent);
+          }
+          });
+        }
+        setupDataTypeSelector() {
+          const selector = document.getElementById('dataType');
+          selector.addEventListener('change', async (event) => {
+            this.dataType = event.target.value;
+
+            if (!this.currentYear) {
+              this.currentYear = '2005'; // 设置默认年份
+            }
+            await this.loadData();
+            this.updateMapColors();
+            this.updateColorAxis();
+          
+            // 如果气泡图正在显示，则更新气泡图
+            const bubbleChartDiv = document.getElementById('bubbleChart');
+            if (bubbleChartDiv.style.display !== 'none') {
+              await this.showBubbleChart(this.currentYear);
+            }
+          
+            if (this.selectedProvince) {
+              const provinceName = this.selectedProvince.properties.name;
+              this.showProvinceInfo(provinceName);
+              this.showProvinceChart(provinceName);
+            }
+          });
+        }
+        updateColorAxis() {
+          document.querySelectorAll('.colorAxis').forEach(axis => {
+            axis.style.display = 'none';
+          });
+          document.getElementById(`${this.dataType}ColorAxis`).style.display = 'block';
+        }
+        loadData() {
+          const dataDirectories = {
+            'gdp': 'gdpdata',
+            'pop': 'popdata',
+            'birth': 'birthdata'
+          };
+        
+          console.log(`Loading ${this.dataType} data for year ${this.currentYear}`);
+          const directory = dataDirectories[this.dataType];
+        
+          return fetch(`${directory}/${this.dataType}_data_${this.currentYear}.json`)
+            .then(response => {
+              if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+              }
+             return response.json();
+              })
+            .then(data => {
+              this.currentData = data;
+              this.maxValue = Math.max(...Object.values(data));
+              this.minValue = Math.min(...Object.values(data));
+              console.log('Data loaded successfully:', this.currentData);
+              this.updateLabels();
+              if (this.map) {
+                this.updateMapColors();
+              }
+            })
+            .catch(error => {
+              console.error(`Error loading data: ${error}`);
+            });
+    }
+  async showBubbleChart(year) {
+
+      const [gdp, pop, birth] = await Promise.all([
+        fetch(`gdpdata/gdp_data_${year}.json`).then(r => r.json()),
+        fetch(`popdata/pop_data_${year}.json`).then(r => r.json()),
+        fetch(`birthdata/birth_data_${year}.json`).then(r => r.json())
+      ]);
+
+      const provinces = Object.keys(gdp);
+      const selectedName = this.selectedProvince ? this.selectedProvince.properties.name : null;
+      const normalData = [];
+      let selectedData = null;
+      provinces.forEach(name => {
+        const item = {
+          value: [gdp[name], pop[name], birth[name], name],
+          itemStyle: name === selectedName ? { color: '#ff0000' } : {}
+        };
+        if (name === selectedName) {
+          selectedData = item;
+        } else {
+          normalData.push(item);
+        }
+      });
+
+      const data = selectedData ? [...normalData, selectedData] : normalData;
+
+      const bubbleChartDiv = document.getElementById('bubbleChart');
+      let posStyle = {
+        right: '30px',
+        left: '',
+        bottom: '30px',
+        top: ''
+      };
+    
+      if (this.selectedProvince && this.angleData) {
+        const provinceName = this.selectedProvince.properties.name;
+        const angle = this.angleData[provinceName];
+        // 折线图在这些方位时，气泡图在右下，否则在左下
+        const rightDownPositions = [1,6,7,8]; // 上、右上、右、左上
+        if (angle && rightDownPositions.includes(angle.position)) {
+          posStyle = { right: '30px', left: '', bottom: '30px', top: '' }; // 右下
+        } else {
+          posStyle = { left: '30px', right: '', bottom: '30px', top: '' }; // 左下
+        }
+      }
+    
+
+      bubbleChartDiv.style.right = posStyle.right;
+      bubbleChartDiv.style.left = posStyle.left;
+      bubbleChartDiv.style.bottom = posStyle.bottom;
+      bubbleChartDiv.style.top = posStyle.top;
+
+      const chartDiv = document.getElementById('bubbleChart');
+      const colorScheme = {
+        'gdp': '#00008B',   
+        'pop': '#DAA520',    
+        'birth': '#1B5E20'   
+      };
+      const option = {
+        title: { text: `${year}年 各省GDP/人口/出生率气泡图`, left: 'center', top: 10, textStyle: { fontSize: 16 } },
+        tooltip: {
+          trigger: 'item',
+          formatter: p => `${p.value[3]}<br>GDP: ${p.value[0]} 亿元<br>人口: ${p.value[1]} 万人<br>出生率: ${p.value[2]}‰`
+        },
+        xAxis: { name: 'GDP(亿元)', scale: true },
+        yAxis: { name: '人口(万人)', scale: true },
+         series: [{
+            type: 'scatter',
+            data: data,
+            symbolSize: val => Math.sqrt(val[2]) * 8,
+            emphasis: { focus: 'series' },
+            label: { show: true, formatter: p => p.value[3], position: 'top', fontSize: 10 },
+            // 设置气泡的默认颜色
+            itemStyle: {
+              color: colorScheme[this.dataType],
+              opacity: 0.7
+            }
+          }],
+      };
+      if (window.bubbleChartInstance) {
+          window.bubbleChartInstance.dispose();
+        }
+
+        window.bubbleChartInstance = echarts.init(chartDiv);
+
+        // 每次都重新绑定点击事件
+        window.bubbleChartInstance.on('click', (params) => {
+          const provinceName = params.value[3];
+          const province = this.map.children.find(p => 
+            p.properties && p.properties.name === provinceName
+          );
+
+          if (province) {
+            this.focusProvince(province);
+            event.stopPropagation();
+          }
+        });
+      window.bubbleChartInstance.setOption(option, true);
+    }
+    getColorByValue(value) {
+      const ratio = (value - this.minValue) / (this.maxValue - this.minValue);
+      const scheme = this.colorSchemes[this.dataType];
+    
+      return new THREE.Color(
+        scheme.startColor.r + (scheme.endColor.r - scheme.startColor.r) * ratio,
+        scheme.startColor.g + (scheme.endColor.g - scheme.startColor.g) * ratio,
+        scheme.startColor.b + (scheme.endColor.b - scheme.startColor.b) * ratio
+      );
+    }
+    updateLabels() {
+      const minLabel = document.getElementById('minValue');
+      const maxLabel = document.getElementById('maxValue');
+      const scheme = this.colorSchemes[this.dataType];
+    
+      if (minLabel && maxLabel) {
+        minLabel.textContent = `${Math.floor(this.minValue)}${scheme.suffix}`;
+        maxLabel.textContent = `${Math.floor(this.maxValue)}${scheme.suffix}`;
+      }
+    }
+    setupCameraLogger() {
+    this.cameraInfo = document.getElementById('cameraInfo');
+    }
+    updateCameraInfo() {
+      // 将弧度转换为角度
+      const toDegrees = (rad) => (rad * 180 / Math.PI).toFixed(2);
+    
+      // 获取欧拉角
+      const euler = new THREE.Euler();
+      euler.setFromQuaternion(this.camera.quaternion);
+    
+      // 格式化相机信息
+      const info = `相机角度:
+      X轴: ${toDegrees(euler.x)}°
+      Y轴: ${toDegrees(euler.y)}°
+      Z轴: ${toDegrees(euler.z)}° 
+      距离: ${this.camera.position.distanceTo(this.controller.target).toFixed(2)}
+      位置: x=${this.camera.position.x.toFixed(2)}, y=${this.camera.position.y.toFixed(2)}, z=${this.camera.position.z.toFixed(2)}`;
+      this.cameraInfo.textContent = info;
+    }
+    setupYearSelector() {
+    const slider = document.getElementById('yearSlider');
+      const yearDisplay = document.getElementById('yearDisplay');
+
+      slider.addEventListener('input', async (event) => {
+        const year = event.target.value;
+        yearDisplay.textContent = `${year}年`;
+    
+        this.currentYear = year;
+        await this.loadData();
+        this.updateMapColors();
+
+
+        if (this.selectedProvince) {
+          const provinceName = this.selectedProvince.properties.name;
+          const chartDiv = document.getElementById('provinceChart');
+
+           chartDiv.style.display = 'block';
+
+          this.showProvinceInfo(provinceName);
+          this.showProvinceChart(provinceName);
+        }
+
+        await this.showBubbleChart(year);
+      });
+    }
+    loadGDPData() {
+      return fetch(`gdpdata/gdp_data_${this.currentYear}.json`)
+      .then(response => response.json())
+      .then(data => {
+        this.gdpData = data;
+        this.maxGDP = Math.max(...Object.values(data));
+        this.minGDP = Math.min(...Object.values(data));
+        this.updateColorAxisLabels();
+        console.log('GDP data loaded:', this.gdpData);
+        });
+    }
+    updateMapColors() {
+      if (!this.map) return;
+      this.map.children.forEach(province => {
+        if (!province || !province.properties) return;
+        const provinceName = province.properties.name;
+        const value = this.currentData[provinceName] || 0;
+        const color = this.getColorByValue(value);
+        province.children.forEach(child => {
+          if (child.material && child.material.length === 2) {
+            if (this.selectedProvince === province) {
+              child.material[0].color.set(0xff0000);
+              child.material[1].color.set(0xff0000);
+            } else {
+              child.material[0].color.copy(color);
+              child.material[1].color.copy(color);
+            }
+          }
+        });
+      });
+    }
+    getColorByGDP(gdpValue) {
+      const ratio = (gdpValue - this.minGDP) / (this.maxGDP - this.minGDP);
+    
+      const startColor = new THREE.Color('#d1da27'); 
+      const endColor = new THREE.Color('#6b1880'); 
+    
+      return new THREE.Color(
+        startColor.r + (endColor.r - startColor.r) * ratio,
+        startColor.g + (endColor.g - startColor.g) * ratio,
+        startColor.b + (endColor.b - startColor.b) * ratio
+      );
+    }
+      updateColorAxisLabels() {
+        const minLabel = document.getElementById('minGDP');
+        const maxLabel = document.getElementById('maxGDP');
+  
+        minLabel.textContent = `${Math.floor(this.minGDP)}亿`;
+        maxLabel.textContent = `${Math.floor(this.maxGDP)}亿`;
+      }
+      // 加载地图数据
+      loadMapData() {
+        const loader = new THREE.FileLoader()
+        loader.load('../json/china.json', (data) => {
+          const jsondata = JSON.parse(data)
+          this.generateGeometry(jsondata)
+        })
+      }
+      generateGeometry(jsondata) {
+        this.map = new THREE.Object3D()
+        // 墨卡托投影转换
+        const projection = d3
+          .geoMercator()
+          .center([104.0, 37.5])
+          .translate([0, 0])
+
+        jsondata.features.forEach((elem) => {
+          const province = new THREE.Object3D()
+          // 每个的 坐标 数组
+          const coordinates = elem.geometry.coordinates
+          // 循环坐标数组
+          coordinates.forEach((multiPolygon) => {
+            multiPolygon.forEach((polygon) => {
+              const shape = new THREE.Shape()
+              const lineMaterial = new THREE.LineBasicMaterial({
+                color: '#666666',
+              })
+              const lineGeometry = new THREE.Geometry()
+
+              for (let i = 0; i < polygon.length; i++) {
+                const [x, y] = projection(polygon[i])
+                if (i === 0) {
+                  shape.moveTo(x, -y)
+                }
+                shape.lineTo(x, -y)
+                lineGeometry.vertices.push(new THREE.Vector3(x, -y, 5))
+              }
+
+              const extrudeSettings = {
+                depth: 10,
+                bevelEnabled: false,
+              }
+
+              const geometry = new THREE.ExtrudeGeometry(
+                shape,
+                extrudeSettings
+              )
+              const provinceName = elem.properties.name;
+              const value = this.currentData[provinceName] || 0;
+              const color = this.getColorByValue(value);
+              console.log(`Province: ${provinceName}, Value: ${value}`);
+              console.log(`Color generated:`, color);
+              const material = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.6,
+              });
+              const material1 = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.6,
+              });
+
+              const mesh = new THREE.Mesh(geometry, [material, material1])
+              const line = new THREE.Line(lineGeometry, lineMaterial)
+              province.properties = elem.properties
+              province.add(mesh)
+              province.add(line)
+            })
+          })
+          this.map.add(province)
+        })
+        this.scene.add(this.map)
+      }
+      setController() {
+        this.controller = new THREE.OrbitControls(
+          this.camera,
+          document.getElementById('canvas')
+        )
+      }
+      addCube() {
+        const geometry = new THREE.BoxGeometry()
+        const material = new THREE.MeshBasicMaterial({ color: 0x50ff22 })
+        this.cube = new THREE.Mesh(geometry, material)
+        this.scene.add(this.cube)
+      }
+      addFont() {
+        const loader = new THREE.FontLoader()
+        loader.load('../json/alibaba.json', (font) => {
+          const geometry = new THREE.TextGeometry('我爱掘金', {
+            font: font,
+            size: 20,
+            height: 5,
+            curveSegments: 12,
+            bevelEnabled: false,
+            bevelThickness: 10,
+            bevelSize: 8,
+            bevelOffset: 0,
+            bevelSegments: 5,
+          })
+          const material = new THREE.MeshBasicMaterial({ color: 0x49ef4 })
+          const mesh = new THREE.Mesh(geometry, material)
+          this.scene.add(mesh)
+        })
+      }
+      addHelper() {
+        const helper = new THREE.CameraHelper(this.camera)
+        this.scene.add(helper)
+      }
+       setCamera() {
+        // 第二参数就是 长度和宽度比 默认采用浏览器  返回以像素为单位的窗口的内部宽度和高度
+        this.camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          1000
+        )
+        this.camera.position.set(0, 0, 120)
+        this.camera.lookAt(this.scene.position)
+      }
+      setRaycaster() {
+        this.raycaster = new THREE.Raycaster()
+        this.mouse = new THREE.Vector2()
+        this.tooltip = document.getElementById('tooltip')
+        const onMouseMove = (event) => {
+          this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1
+          this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1
+          this.tooltip.style.left = event.clientX + 2 + 'px'
+          this.tooltip.style.top = event.clientY + 2 + 'px'
+        }
+
+        window.addEventListener('mousemove', onMouseMove, false)
+      }
+      setRenderer() {
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: document.getElementById('canvas'),
+        })
+        this.renderer.setPixelRatio(window.devicePixelRatio)
+        this.renderer.setSize(window.innerWidth, window.innerHeight)
+      }
+      setLight() {
+        let ambientLight = new THREE.AmbientLight(191970, 20)
+        this.scene.add(ambientLight)
+      }
+
+      render() {
+        this.renderer.render(this.scene, this.camera)
+      }
+
+      animate() {
+        requestAnimationFrame(this.animate.bind(this));
+        if (!this.currentData || !this.map) {
+          this.render();
+          return;
+        }
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+        const intersects = this.raycaster.intersectObjects(
+          this.scene.children,
+          true
+        );
+        if (!this.selectedProvince) {
+          if (this.lastPick && this.lastPick.object && this.lastPick.object.parent) {
+            const provinceName = this.lastPick.object.parent.properties.name;
+            const value = this.currentData[provinceName] || 0;
+            const color = this.getColorByValue(value);
+            if (this.lastPick.object.material) {
+              this.lastPick.object.material[0].color.copy(color);
+              this.lastPick.object.material[1].color.copy(color);
+            }
+          }
+          this.lastPick = null;
+          this.lastPick = intersects.find(
+            (item) => item.object.material && item.object.material.length === 2
+          );
+          if (this.lastPick) {
+            this.lastPick.object.material[0].color.set(0xff0000);
+            this.lastPick.object.material[1].color.set(0xff0000);
+          }
+          this.showTip();
+        } else {
+          this.tooltip.style.visibility = 'hidden';
+        }
+        this.updateCameraInfo();
+        this.render();
+      }
+      showProvinceInfo(provinceName) {
+        const value = this.currentData[provinceName];
+        const scheme = this.colorSchemes[this.dataType];
+        const dataTypeName = {
+          'gdp': 'GDP',
+          'pop': '人口',
+          'birth': '出生率'
+        }[this.dataType];
+        this.provinceInfoBox.innerHTML = `<b>${provinceName}</b><br>${this.currentYear}年 ${dataTypeName}: ${value ? value.toFixed(1) : '暂无数据'}${scheme.suffix}`;
+        this.provinceInfoBox.style.display = 'block';
+      }  
+      showTip() {
+        if (this.lastPick) {
+          const properties = this.lastPick.object.parent.properties;
+          const value = this.currentData[properties.name];
+          const scheme = this.colorSchemes[this.dataType];
+          const dataTypeName = {
+            'gdp': 'GDP',
+            'pop': '人口',
+            'birth': '出生率'
+          }[this.dataType];
+
+          this.tooltip.textContent = `${properties.name}
+          ${this.currentYear}年 ${dataTypeName}: ${value ? value.toFixed(1) : '暂无数据'}${scheme.suffix}`;
+
+          this.tooltip.style.visibility = 'visible';
+        } else {
+          this.tooltip.style.visibility = 'hidden';
+        }
+      }
+    }
+    window.addEventListener('click', (e) => { this.selectedProvince = null; this.provinceInfoBox.style.display = 'none'; this.updateMapColors(); });
+    const map = new chinaMap()
+    window.addEventListener('click', function(e) {
+      // 判断是否点击在canvas上，如果不是则取消选中
+      if (e.target.id !== 'canvas') {
+      map.selectedProvince = null;
+      map.provinceInfoBox.style.display = 'none';
+      map.updateMapColors();
+      //document.getElementById('provinceChart').style.display = 'none';
+    }
+    });
+  </script>
+</body>
